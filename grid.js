@@ -46,6 +46,8 @@ const cvOpt = {
 */
 function grid(gridOptions, measurement, tabs) {
     const formCellOptions = gridOptions.formCell;
+    const loc = spm.dataLocation;
+    const z0 = spm.zstage.pos;
     
     if (gridOptions.liftHeight === undefined) gridOptions.threshold = 1.5;
     if (gridOptions.liftSpeed === undefined) gridOptions.speed = 0.5;
@@ -99,20 +101,21 @@ function grid(gridOptions, measurement, tabs) {
         log(tabs+2, 'Settling for ' + gridOptions.holdTimeAfterLift.toFixed(0) + 'ms');
         spm.sleep(gridOptions.holdTimeAfterLift);
 
+        const z = spm.zstage.pos - z0 - spm.zscanner.fullyRetractedPos + spm.zscanner.pos;
+
         log(tabs+2, 'Measuring')
-        const loc = spm.dataLocation;
         const newLoc = {
-            "baseDir": loc.baseDir + loc.subDir,
+            "baseDir": loc.baseDir + loc.subDir + '/'+ loc.fileName,
             "cameraSave":false,
             "direction":"auto",
             "envLogDir":loc.envLogDir,
             "fieldWidth": loc.fieldWidth,
-            "fileName":i,
+            "fileName": i+'_x='+1000*x.toFixed(3)+'nm_y='+1000*y.toFixed(3)+'nm_z='+1000*z.toFixed(3)+'nm',
             "fileSuffix":"",
             "imageQualitySave": false,
             "jpegSave": false,
             "precision": 1,
-            "subDir": loc.fileName
+            "subDir": ""
         };
         spm.dataLocation = newLoc;
         measurement();
