@@ -1,10 +1,20 @@
-const threshold= 3.00; // pA threshold current
-const speed = 1; // um/s approach speed
-const formCellBias = -0.6; // V bias for cell formation
-const endBias = 0; // V bias after cell formation
-const biasChannel = 'sample'; // "sample" or "tip" channel for biasing
-const minZstep = 0.01; // um/s minimum step size for z
+const formCellOpt = {
+    threshold: 3.00, // threshold current (pA)
+    speed: 0.5, // target approach speed (um/s)
+    formCellBias: -1.5, // sample bias during cell formation (V)
+    endBias: 0, // sample bias after cell formation (V)
+    resetZScanner: false, // fully retract z piezo at start if true
+    constantCurrentTime: 100, // time to wait after forming a cell (ms)
+    minimumZStep: 0.01, // minimum z piezo step size (um)
+    debug: true // send debug messages if true
+}
 
+formCell(formCellOpt, 0);
+
+/*
+** Gets the current in pA
+** @return current (pA)
+*/
 function getCurrent() { // gets current in pA
     const current = spm.readChannel('current');
     const i = current.value * { 'nA': 1000, 'pA': 1, 'fA': 0.001 }[current.unit];
@@ -12,88 +22,98 @@ function getCurrent() { // gets current in pA
     return i;
 }
 
-function formCell(threshold, speed, formCellBias, endBias, biasChannel) {
-    const minZstep = 0.01;
+/*
+* Logs a message with a given number of tabs
+* @param tabs number of tabs, a negative value prints nothing
+* @param string the string to print
+*/
+function log(tabs, string) {
+    if (tabs < 0) return;
+    for(var j=0; j<tabs; j++) string = "  " + string;
+    print(string);
+}
+
+/*
+** Forms a cell at the current xy position
+** @param options form cell parameters
+** @param tabs current tab level
+*/
+function formCell(options, tabs) {
+    if (options.threshold === undefined) options.threshold = 3.00;
+    if (options.speed === undefined) options.speed = 0.5;
+    if (options.formCellBias === undefined) options.formCellBias = -1.5;
+    if (options.endBias === undefined) options.endBias = 0;
+    if (options.resetZScanner === undefined) options.resetZScanner = true;
+    if (options.constantCurrentTime === undefined) options.constantCurrentTime = 30;
+    if (options.minimumZStep === undefined) options.minimumZStep = 0.01;
+
+    if (options.debug === undefined || !options.debug) tabs = -Infinity;
+
+    const zScanner0 = spm.zscanner.pos;
+    const zStage0 = spm.zstage.pos;
+    const t0 = Date.now();
 
     var formedCell = false;
-    var t1 = Date.now();
+
+    log(tabs, 'Forming cell');
+    log(tabs+1, "Setting sample bias to " + options.formCellBias.toFixed(2) + "V");
     spm.addChannel('current');
+    spm.bias.sample = options.formCellBias;
+    spm.bias.tip = 0;
 
-    print('beginning approach');
-    if (biasChannel === 'tip') {
-        spm.bias.tip = formCellBias;
-        spm.bias.sample = 0;
-    } else {
-        spm.bias.tip = 0;
-        spm.bias.sample = formCellBias;
-    }
-    while (!formedCell) {
-        print('\tchecking current');
-        //check current
-        var i = getCurrent();
-        // print('\ti = ' + i + 'pA');
-
-        // step z piezo
-        print('\t retracting z piezo');
+    if (options.resetZScanner) {
+        log(tabs+1, "Resetting z scanner");
         spm.zscanner.moveTo(spm.zscanner.fullyRetractedPos);
-        spm.sleep(100);
+    }
 
-        print('\t stepping z piezo');
-        var zFine = spm.zscanner.pos;
-        var zFineStep = minZstep;
+    for (var nLoops = 0; !formedCell; nLoops++) {
+        var i = getCurrent();
+        log(tabs+1, "Loop " + nLoops + ": i=" + i.toFixed(4) + "pA");
+
+        var zScanner = spm.zscanner.pos;
+        var zScannerStep = options.minimumZStep;
         var t1 = Date.now();
-        // print('\t' + zFine + ' - ' + zFineStep + ' = ' + (zFine - zFineStep) + ' >= ' + spm.zscanner.fullyExtendedPos + ': ' + (zFine - zFineStep >= spm.zscanner.fullyExtendedPos));
-        while ((zFine - zFineStep >= spm.zscanner.fullyExtendedPos) && (Math.abs(i) < threshold)) { // step z piezo while range is available and current is within threshold
-            spm.zscanner.moveTo(zFine - zFineStep);
+        log(tabs+2,"Stepping z scanner");
+        while ((zScanner - zScannerStep >= spm.zscanner.fullyExtendedPos) && (Math.abs(i) < options.threshold)) {
+            spm.zscanner.moveTo(zScanner - zScannerStep);
 
-            zFine = spm.zscanner.pos;
-            // print('\t\tzFine = ' + zFine + 'um');
-
+            zScanner = spm.zscanner.pos;
             i = getCurrent();
-            // print('\t\ti = ' + i + 'pA');
 
             const t2 = Date.now();
             const dt = t2 - t1;
             t1 = t2;
-            const dz = speed * dt / 1000.0; // target z step based on time passed
-            zFineStep = Math.max(minZstep, dz); // don't step smaller than the minimum z step
-            // print('\t\tzFineStep = ' + zFineStep + 'um');
-
-            if (dz < minZstep) {
-                // print('\t\t delaying by ' + (minZstep / speed * 1000.0) + 'us');
-                spm.sleep(minZstep / speed * 1000.0); // slow down if moving faster than speed
+            const dz = options.speed * dt / 1000.0; // target z step based on time passed (um)
+            zScannerStep = Math.max(options.minimumZStep, dz); // don't step smaller than the minimum z step
+            if (dz < options.minimumZStep) {
+                spm.sleep(options.minimumZStep / options.speed * 1000.0); // slow down if moving faster than speed
             }
         }
 
-        if(Math.abs(i) >= threshold) {
+        if(Math.abs(i) >= options.threshold) {
+            log(tabs+2,"Formed cell, holding for " + options.constantCurrentTime.toFixed(0) + "ms");
             formedCell = true;
-            print('\tformed cell');
-            break;
+            spm.sleep(options.constantCurrentTime);
+            const i2 = getCurrent();
+            const iavg = (i2 + i) / 2;
+            if (Math.abs(iavg) >= options.threshold) {
+                log(tabs+2,"Formed cell with i=" + iavg.toFixed(4) + "pA and deltaZ =" + (spm.zscanner.pos + spm.zstage.pos - zScanner0 - zStage0).toFixed(2) + 'um');
+                break;
+            } else {
+                log(tabs+2,"False positive with i=" + iavg.toFixed(4) + "pA");
+            }
         }
-
-        print('\t retracting z piezo');
+        log(tabs+2, "Retracting z scanner");
         spm.zscanner.moveTo(spm.zscanner.fullyRetractedPos);
-        spm.sleep(100);
+        spm.sleep(500);
 
-        print('\t stepping z motor');
+        log(tabs+2, "Stepping z stage");
         const zCoarse = spm.zstage.pos;
         const zCoarseStep = (spm.zscanner.fullyRetractedPos - spm.zscanner.fullyExtendedPos) * 0.85;
         spm.zstage.moveTo(zCoarse - zCoarseStep);
-        spm.sleep(100);
+        spm.sleep(500);
     }
 
-    print('resetting bias');
-    
-    if (biasChannel === 'tip') {
-        spm.bias.tip = endBias;
-        spm.bias.sample = 0;
-    } else {
-        spm.bias.tip = 0;
-        spm.bias.sample = endBias;
-    }
-
-    //TODO: track time taken and distance traveled
-    //TODO: better gui
+    log(tabs+1, "Resetting sample bias to " + options.endBias.toFixed(2) + "V");
+    spm.bias.sample = options.endBias;
 }
-
-formCell(threshold, speed, formCellBias, endBias, biasChannel);
